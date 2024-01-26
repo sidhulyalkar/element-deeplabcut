@@ -8,7 +8,7 @@ import datajoint as dj
 import inspect
 import importlib
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath, PurePosixPath
 from element_interface.utils import find_full_path, dict_to_uuid
 from .readers import dlc_reader
 import yaml
@@ -243,6 +243,7 @@ class ModelTraining(dj.Computed):
 
     def make(self, key):
         import deeplabcut
+
         try:
             from deeplabcut.utils.auxiliaryfunctions import (
                 get_model_folder,
@@ -288,26 +289,49 @@ class ModelTraining(dj.Computed):
         )
         model_train_folder = project_path / model_folder / "train"
 
-        # update init_weight
+        # update init_weights, dataset, and metadataset paths in pose_config.yaml
         with open(model_train_folder / "pose_cfg.yaml", "r") as f:
             pose_cfg = yaml.safe_load(f)
-        init_weights_path = Path(pose_cfg["init_weights"])
 
-        if "pose_estimation_tensorflow/models/pretrained" in init_weights_path.as_posix():
+        # handle windows path passed in input
+        try:
+            init_weights_windows_path = PureWindowsPath(pose_cfg["init_weights"])
+            init_weights_path = PurePosixPath(*init_weights_windows_path.parts[2:])
+            dataset_path = PurePosixPath(PureWindowsPath(pose_cfg["dataset"]))
+            metadataset_path = PurePosixPath(PureWindowsPath(pose_cfg["metadataset"]))
+        except ValueError:
+            init_weights_path = Path(pose_cfg["init_weights"])
+            dataset_path = Path(pose_cfg["dataset"])
+            metadataset_path = Path(pose_cfg["metadataset"])
+
+        if (
+            "pose_estimation_tensorflow/models/pretrained"
+            in init_weights_path.as_posix()
+        ):
             # this is the res_net models, construct new path here
-            init_weights_path = Path(deeplabcut.__path__[0]) / "pose_estimation_tensorflow/models/pretrained" / init_weights_path.name
+            init_weights_path = (
+                Path(deeplabcut.__path__[0])
+                / "pose_estimation_tensorflow/models/pretrained"
+                / init_weights_path.name
+            )
         else:
             # this is existing snapshot weights, update path here
             init_weights_path = model_train_folder / init_weights_path.name
-        
+
         edit_config(
             model_train_folder / "pose_cfg.yaml",
-            {"project_path": project_path.as_posix(), 
-             "init_weights": init_weights_path.as_posix()},
+            {
+                "project_path": project_path.as_posix(),
+                "init_weights": init_weights_path.as_posix(),
+                "dataset": dataset_path.as_posix(),
+                "metadataset": metadataset_path.as_posix(),
+            },
         )
 
         # ---- Trigger DLC model training job ----
-        train_network_input_args = list(inspect.signature(deeplabcut.train_network).parameters)
+        train_network_input_args = list(
+            inspect.signature(deeplabcut.train_network).parameters
+        )
         train_network_kwargs = {
             k: int(v) if k in ("shuffle", "trainingsetindex", "maxiters") else v
             for k, v in dlc_config.items()
@@ -334,7 +358,7 @@ class ModelTraining(dj.Computed):
 
         # update snapshotindex in the config
         snapshotindex = snapshots.index(latest_snapshot_file)
-        
+
         dlc_config["snapshotindex"] = snapshotindex
         edit_config(
             dlc_cfg_filepath,
@@ -346,3 +370,9 @@ class ModelTraining(dj.Computed):
         )
 
 
+def _is_windows_path(path):
+    try:
+        PureWindowsPath(path)
+        return True
+    except ValueError:
+        return False
