@@ -368,11 +368,3 @@ class ModelTraining(dj.Computed):
         self.insert1(
             {**key, "latest_snapshot": latest_snapshot, "config_template": dlc_config}
         )
-
-
-def _is_windows_path(path):
-    try:
-        PureWindowsPath(path)
-        return True
-    except ValueError:
-        return False
